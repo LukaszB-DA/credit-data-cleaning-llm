@@ -1,160 +1,163 @@
-# ETL z LLM — inteligentne czyszczenie danych bankowych na dużą skalę
+# ETL with LLM — smart large-scale cleaning of bank data
 
-## O projekcie
+🇬🇧 English | 🇵🇱 [Polski](README.pl.md)
 
-Drugi etap mojego portfolio z zakresu czyszczenia danych — po ręcznym, klasycznym
-czyszczeniu danych kredytowych (Excel/Power Query + Python), ten projekt pokazuje
-**świadome** wykorzystanie LLM w pipeline ETL: nie "wrzucam wszystko do modelu bo
-się da", tylko architekturę, która używa taniego, deterministycznego kodu tam,
-gdzie to wystarcza, a LLM tylko tam, gdzie faktycznie daje przewagę.
+## About the project
 
-**Cel:** oczyścić 101 500 rekordów bankowych (kredyty, styl Lending Club) w jednym,
-zautomatyzowanym przebiegu, łącząc klasyczne techniki (pandas, regex, fuzzy
-matching, rekord linkage) z modelem językowym (Gemini) tam, gdzie reguły
-zawodzą — niejednoznaczne formaty dat i wolny tekst.
+The second stage of my data-cleaning portfolio — after manual, classical
+cleaning of credit data (Excel/Power Query + Python), this project shows
+**deliberate** use of an LLM inside an ETL pipeline: not "throw everything at
+the model because you can", but an architecture that uses cheap,
+deterministic code wherever it's enough, and the LLM only where it actually
+adds value.
 
-> **Uwaga językowa:** prompty wysyłane do modelu oraz komunikaty w `print()`
-> są napisane po polsku — to był świadomy wybór na etapie budowy, nie
-> przeoczenie. Komentarze w kodzie są sukcesywnie uzupełniane wersją
-> angielską, docelowo repo będzie miało dwujęzyczne README (PL/EN).
+**Goal:** clean 101,500 bank records (loans, Lending-Club-style) in one
+automated run, combining classical techniques (pandas, regex, fuzzy matching,
+record linkage) with a language model (Gemini) exactly where rules fail —
+ambiguous date formats and free text.
 
-## Dane
+> **Language note:** the prompts sent to the model and the `print()` messages
+> are written in Polish — a deliberate choice made during development, not an
+> oversight. Code comments are being filled in bilingually (PL/EN); the repo
+> will ultimately have this bilingual README.
 
-Ponieważ realne dane bankowe (np. pełny zbiór Lending Club) nie były dostępne
-w wystarczająco "surowej" formie (dostępne kopie były już wstępnie zakodowane/
-oczyszczone, bez pól tekstowych), zbudowałem:
+## Data
 
-- **`clean_data.csv`** — 100 000 syntetycznych rekordów, statystycznie
-  kalibrowanych na realnych rozkładach Lending Club (kwoty, oprocentowanie
-  skorelowane z oceną ryzyka, wzory finansowe na ratę itd.) — to jest ground
-  truth, nigdy nie widziany przez model.
-- **`dirty_data.csv`** — 101 500 wierszy (100k + 1500 zduplikowanych klientów
-  z wariacjami), z kontrolowanym, w pełni zalogowanym "brudem": braki danych
-  w 5 różnych zapisach, 5 formatów dat, separator dziesiętny przecinek/kropka,
-  warianty kategorii, literówki w tekście, wartości fizycznie niemożliwe.
+Since real bank data (e.g. the full Lending Club dataset) wasn't available in
+a sufficiently "raw" form (available copies were already pre-encoded/cleaned,
+with no free-text fields), I built:
 
-Dzięki własnoręcznie wygenerowanemu brudowi mam dokładny ground truth — mogę
-precyzyjnie zmierzyć skuteczność każdego etapu czyszczenia, zamiast tylko
-zakładać że "wygląda dobrze".
+- **`clean_data.csv`** — 100,000 synthetic records, statistically calibrated
+  to real Lending Club distributions (loan amounts, interest rate correlated
+  with risk grade, real installment formulas, etc.) — this is the ground
+  truth, never seen by the model.
+- **`dirty_data.csv`** — 101,500 rows (100k + 1,500 duplicate customers with
+  variations), with controlled, fully logged "dirt": missing values in 5
+  different representations, 5 date formats, comma/dot decimal separator,
+  category variants, text typos, physically impossible values.
 
-**Eksploracja danych:** zanim napisałem reguły czyszczące, przeglądałem dane
-iteracyjnie w Data Wrangler (VS Code/Jupyter) — filtry, `groupby`, sortowanie
-ASC/DESC — do szybkiego wyłapywania outlierów, wartości nielogicznych i
-wzorców w brudnych kolumnach, zanim to przełożyło się na konkretne reguły w
-kodzie (np. `pd.to_numeric(errors="coerce")` do wykrywania niesparsowalnych
-wartości, regex przy ekstrakcji `grade`).
+Because I generated the dirt myself, I have an exact ground truth — I can
+precisely measure the effectiveness of every cleaning stage instead of just
+assuming it "looks right".
 
-## Architektura — dwie warstwy
+**Data exploration:** before writing any cleaning rule, I explored the data
+iteratively in Data Wrangler (VS Code/Jupyter) — filters, `groupby`,
+ASC/DESC sorting — to quickly spot outliers, illogical values, and patterns
+in the dirty columns, before that translated into concrete rules in code
+(e.g. `pd.to_numeric(errors="coerce")` to detect unparseable values, regex
+when extracting `grade`).
 
-### Warstwa 1: kod (deterministyczny, zero LLM)
+## Architecture — two layers
 
-Obsługuje wszystko, co da się rozwiązać regułami/dopasowaniem tekstu:
+### Layer 1: code (deterministic, zero LLM)
 
-| Problem | Metoda | Skuteczność |
+Handles everything solvable with rules/text matching:
+
+| Problem | Method | Accuracy |
 |---|---|---|
-| Braki danych (5 zapisów) | `.replace()` na markery + `pd.to_numeric(errors="coerce")` do wykrywania | 100% |
-| Separator dziesiętny | `pd.to_numeric(errors="coerce")` | 100% |
-| Wartości fizycznie niemożliwe | reguły zakresowe | 100% |
-| `home_ownership`, `purpose` (literówki) | fuzzy matching (rapidfuzz) | 100% |
-| Telefon | ekstrakcja cyfr + reformatowanie | 100% |
-| Duplikaty klientów | blokowanie + porównanie (recordlinkage) | 99,3% par ze 100% trafnością |
+| Missing values (5 representations) | `.replace()` on markers + `pd.to_numeric(errors="coerce")` for detection | 100% |
+| Decimal separator | `pd.to_numeric(errors="coerce")` | 100% |
+| Physically impossible values | range rules | 100% |
+| `home_ownership`, `purpose` (typos) | fuzzy matching (rapidfuzz) | 100% |
+| Phone number | digit extraction + reformatting | 100% |
+| Customer duplicates | blocking + comparison (recordlinkage) | 99.3% of pairs, 100% accurate |
 
-### Warstwa 2: LLM (Gemini 3.5 Flash-Lite) — tylko eskalacja
+### Layer 2: LLM (Gemini 3.5 Flash-Lite) — escalation only
 
-Trafia tam **tylko** to, czego warstwa 1 nie rozstrzygnie jednoznacznie:
+**Only** what layer 1 cannot resolve unambiguously is routed here:
 
-- **Daty** (`application_date`, `issue_date`) — 5 formatów wejściowych,
-  niejednoznaczność dzień/miesiąc. Model wykorzystuje kontekst (issue_date
-  zawsze 1-30 dni po application_date) do rozstrzygania.
-- **`advisor_notes`** — wolny tekst, literówki, normalizacja stylu.
-- **Strefa szara duplikatów** — ~0,7% par, gdzie kod nie jest pewny.
+- **Dates** (`application_date`, `issue_date`) — 5 input formats, day/month
+  ambiguity. The model uses context (issue_date is always 1-30 days after
+  application_date) to resolve ambiguous cases.
+- **`advisor_notes`** — free text, typos, style normalization.
+- **Duplicate gray zone** — ~0.7% of pairs where the code isn't confident.
 
-**Uzasadnienie tego podziału:** przed użyciem LLM zmierzyłem skuteczność
-klasycznego parsera dat (lista znanych formatów) — wyszło **~61% poprawnych
-dat**, z czego 3657 przypadków to *ciche* pomyłki dzień/miesiąc (parser nie
-rzucał błędu, po prostu dawał złą datę). To pokazało, że akurat to zadanie
-faktycznie potrzebuje LLM.
+**Why this split:** before reaching for an LLM, I measured a classical date
+parser's accuracy (a list of known formats) — it came out to **~61% correct
+dates**, of which 3,657 cases were *silent* day/month mix-ups (the parser
+didn't error, it just returned the wrong date). That's what showed this
+particular task genuinely needed an LLM.
 
-## Wyniki końcowe (101 500 rekordów)
+## Final results (101,500 records)
 
-| Metryka | Wynik |
+| Metric | Result |
 |---|---|
-| `application_date` | 98,78% |
-| `issue_date` | 99,52% |
-| Duplikaty (kod) | 1466 par, 100% trafność |
-| Duplikaty (LLM, strefa szara) | 17/17 poprawnych ocen |
-| Model użyty | `gemini-3.5-flash-lite`, jeden na całości |
+| `application_date` | 98.78% |
+| `issue_date` | 99.52% |
+| Duplicates (code) | 1,466 pairs, 100% accurate |
+| Duplicates (LLM, gray zone) | 17/17 correct verdicts |
+| Model used | `gemini-3.5-flash-lite`, one model throughout |
 
-**Dla porównania:** typowy błąd ręcznego wprowadzania danych w literaturze to
-1-5% (Panko i in.), a w bardziej złożonych/niejednorodnych dokumentach nawet
-18-40%. Wynik 98,78%/99,52% jest porównywalny lub lepszy niż realistyczny
-scenariusz ręcznego czyszczenia, przy ułamku czasu.
+**For context:** typical manual data-entry error rates reported in the
+literature are 1-5% (Panko et al.), rising to 18-40% for more complex/
+heterogeneous documents. A 98.78%/99.52% result is comparable to or better
+than a realistic manual-cleaning scenario, in a fraction of the time.
 
-### Diagnoza pozostałych błędów dat
+### Diagnosing the remaining date errors
 
-Nie poprzestałem na samej metryce — sprawdziłem **naturę** błędów:
+I didn't stop at the headline metric — I checked the **nature** of the errors:
 
-- **91,2%** błędnych dat to dokładnie zamiana dzień↔miesiąc (oba ≤12) — nawet
-  wskazówka kontekstowa (issue_date) czasem nie wystarcza do jednoznacznego
-  rozstrzygnięcia.
-- Zidentyfikowałem też systematyczną słabość modelu przy formacie
-  `MM-DD-YYYY` (myślnik) — miesiąc rozpoznawany poprawnie, ale dzień bywał
-  błędnie kopiowany z miesiąca.
-- Pozostałe ~9% błędów (w tym kilka `null` mimo jednoznacznych dat) to
-  pojedyncze przypadki bez wspólnego wzorca.
+- **91.2%** of wrong dates are an exact day↔month swap (both ≤12) — even the
+  contextual hint (issue_date) sometimes isn't enough to resolve it
+  unambiguously.
+- I also identified a systematic model weakness with the `MM-DD-YYYY` format
+  (hyphen) — the month was recognized correctly, but the day was sometimes
+  wrongly copied from the month.
+- The remaining ~9% of errors (including a handful of `null`s despite
+  unambiguous dates) are isolated cases with no shared pattern.
 
-## Pipeline — jak to działa
+## Pipeline — how it works
 
-Cały pipeline to **jeden plik** (`clean_credit_data_llm.py`), wykonujący 4 kroki
-sekwencyjnie po jednym uruchomieniu:
+The whole pipeline is **one file** (`clean_credit_data_llm.py`), running 4
+steps sequentially in a single execution:
 
 ```
 dirty_data.csv
       │
       ▼
-KROK 1/4: warstwa deterministyczna (kod)  ──────► layer1_cleaned.csv
+STEP 1/4: deterministic layer (code)  ──────► layer1_cleaned.csv
       │
-KROK 2/4: wykrywanie duplikatów (recordlinkage)
+STEP 2/4: duplicate detection (recordlinkage)
       │            │
       │            └──► auto_duplicate.csv / auto_not_duplicate.csv
       │                          │
-      └──► duplicate_candidates_gray.csv (strefa szara, ~0,7% par)
+      └──► duplicate_candidates_gray.csv (gray zone, ~0.7% of pairs)
                   │
                   ▼
-KROK 3/4: warstwa LLM (Gemini, async)  ──► layer2_dates_notes_full.csv
-      │                                     + duplicate_verdicts_llm.csv
+STEP 3/4: LLM layer (Gemini, async)  ──► layer2_dates_notes_full.csv
+      │                                   + duplicate_verdicts_llm.csv
       ▼
-KROK 4/4: scalenie finalne  ──────► final_cleaned_data.csv  (101 500 wierszy)
+STEP 4/4: final merge  ──────► final_cleaned_data.csv  (101,500 rows)
 ```
 
-Warstwa LLM działa **asynchronicznie, paczkami po 100 rekordów**, z
-ograniczoną współbieżnością (semafor), regulatorem tempa (rate limiter),
-automatycznym ponawianiem przy błędach (w tym walidacją kompletności
-odpowiedzi — jeśli model zwróci mniej rekordów niż dostał, paczka jest
-automatycznie ponawiana), oraz mechanizmem wznawiania pozwalającym
-kontynuować przetwarzanie między sesjami bez powtarzania już zrobionej pracy.
+The LLM layer runs **asynchronously, in batches of 100 records**, with
+bounded concurrency (semaphore), a rate limiter, automatic retries on errors
+(including response-completeness validation — if the model returns fewer
+records than it received, the batch is automatically retried), and a resume
+mechanism that lets processing continue across sessions without repeating
+already-completed work.
 
-## Struktura repozytorium
+## Repository structure
 
 ```
-├── clean_data.csv                    # ground truth (nie używane przez LLM)
-├── dirty_data.csv                    # dane wejściowe z kontrolowanym brudem
-├── final_cleaned_data.csv            # WYNIK KOŃCOWY
-├── dirt_log_ground_truth.csv         # log każdego zabrudzenia (do audytu)
-├── duplicate_ground_truth.csv        # mapowanie duplikatów (ground truth)
-├── generate_clean_data.py            # generator ground truth
-├── dirty_data.py                     # generator kontrolowanego brudu
-├── clean_credit_data_llm.py          # GŁÓWNY PIPELINE (4 kroki, 1 plik)
-└── data_cleaning_process.ipynb       # proces eksploracji i decyzji
+├── clean_data.csv                    # ground truth (never seen by the LLM)
+├── dirty_data.csv                    # input data with controlled dirt
+├── final_cleaned_data.csv            # FINAL RESULT
+├── dirt_log_ground_truth.csv         # log of every injected error (for audit)
+├── duplicate_ground_truth.csv        # duplicate mapping (ground truth)
+├── generate_clean_data.py            # ground-truth generator
+├── dirty_data.py                     # controlled-dirt generator
+├── clean_credit_data_llm.py          # MAIN PIPELINE (4 steps, 1 file)
+└── data_cleaning_process.ipynb       # exploration and decision-making process
 ```
 
-## Co dalej / możliwe rozszerzenia
+## What's next / possible extensions
 
-- Osobna walidacja czy pary duplikatów wykryte przez kod nie mają nakładających
-  się `id` (drobna rozbieżność 1473 vs 1483 wykryta podczas scalania)
-- Test skuteczności modelu na formacie `MM-DD-YYYY` z dodatkową heurystyką
-- Rozszerzenie brudzenia o pole `email` (zauważone jako pominięte)
+- A separate check on whether the duplicate pairs found by code overlap in
+  `id` (a small discrepancy of 1,473 vs. 1,483 was found during merging)
+- Test the model's accuracy on the `MM-DD-YYYY` format with an added heuristic
+- Extend the dirtying process to the `email` field (noted as skipped)
 
 ---
 
-*Autor: [LukaszB-DA](https://github.com/LukaszB-DA) · Projekt portfolio — ETL z LLM, czyszczenie danych bankowych na dużą skalę (Python + Gemini API).*
+*Author: [LukaszB-DA](https://github.com/LukaszB-DA) · Portfolio project — ETL with LLM, large-scale bank data cleaning (Python + Gemini API).*
